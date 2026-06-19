@@ -97,6 +97,37 @@ run_migrations() {
 }
 
 # ---------------------------------------------------------------------------
+# Rebuild the package manifest so a persistent bootstrap/cache volume can never
+# serve a stale provider list after dependencies change between deploys.
+# ---------------------------------------------------------------------------
+refresh_package_manifest() {
+    log "Refreshing package manifest ..."
+    php artisan package:discover --ansi
+}
+
+# ---------------------------------------------------------------------------
+# Passport: generate signing keys (only if absent so tokens stay valid across
+# restarts). Keys live in the shared storage volume so queue/scheduler can
+# validate tokens too.
+# ---------------------------------------------------------------------------
+ensure_passport_keys() {
+    if [ ! -f storage/oauth-private.key ]; then
+        log "Generating Passport encryption keys ..."
+        php artisan passport:keys --no-interaction
+    else
+        log "Passport keys already present."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Seed roles and the OAuth password-grant client (idempotent).
+# ---------------------------------------------------------------------------
+run_seeders() {
+    log "Seeding roles and OAuth client ..."
+    php artisan db:seed --force --no-interaction
+}
+
+# ---------------------------------------------------------------------------
 # 4. Warm caches — dramatically reduces per-request latency
 # ---------------------------------------------------------------------------
 warm_caches() {
@@ -132,8 +163,17 @@ wait_for_mysql
 # Only the primary application container mutates shared state (schema + caches).
 # Worker containers skip these steps to avoid redundant work and migrate races.
 if [ "${CONTAINER_ROLE}" = "app" ]; then
+    # Purge stale bootstrap caches before ANY artisan command. A persisted
+    # config.php built before optional packages (e.g. Scramble) were added will
+    # crash provider boot with config('scramble') === null.
+    rm -f bootstrap/cache/config.php bootstrap/cache/routes-v7.php 2>/dev/null || true
+
     ensure_app_key
+    php artisan config:clear --no-interaction
+    refresh_package_manifest
     run_migrations
+    ensure_passport_keys
+    run_seeders
     warm_caches
     create_storage_link
 else
