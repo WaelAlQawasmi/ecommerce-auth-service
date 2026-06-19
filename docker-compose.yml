@@ -1,0 +1,359 @@
+# =============================================================================
+# docker-compose.yml — ecommerce-auth-service
+#
+# Best-practice patterns applied:
+#   • No deprecated `version` key (Compose v2 spec)
+#   • Backend services isolated on an internet-less `internal` network
+#   • Controlled outbound access via a dedicated `egress` network
+#   • Only nginx exposes a host port (via `external`)
+#   • Healthcheck-aware `depends_on` (condition: service_healthy)
+#   • Named volumes for all persistent data
+#   • Resource limits to prevent runaway containers
+#   • Hardened runtime: no-new-privileges, dropped capabilities, read-only FS
+#   • Centralised log rotation to protect host disk space
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Reusable log-rotation policy (YAML anchor) applied to every service so a
+# noisy container can never fill the host disk.
+# -----------------------------------------------------------------------------
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PHP-FPM — Laravel application
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production           # explicit target for clarity
+    image: ecommerce-auth-service:latest
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      # Force production mode inside the container regardless of .env
+      APP_ENV: production
+      APP_DEBUG: "false"
+      # Primary container: owns migrations + cache warming
+      CONTAINER_ROLE: app
+    volumes:
+      # Persist uploaded/generated files across container restarts
+      - app-storage:/var/www/html/storage
+      - app-bootstrap-cache:/var/www/html/bootstrap/cache
+    networks:
+      - internal
+      - egress
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Real FPM liveness probe via the /fpm-ping endpoint (not just config lint)
+      test: ["CMD-SHELL",
+             "SCRIPT_NAME=/fpm-ping SCRIPT_FILENAME=/fpm-ping REQUEST_METHOD=GET cgi-fcgi -bind -connect 127.0.0.1:9000"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      # OPcache file cache, PHP sessions and scratch space
+      - /tmp
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # Nginx — reverse proxy + static asset server (public/ baked into the image)
+  # ---------------------------------------------------------------------------
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: nginx
+    image: ecommerce-auth-service-nginx:latest
+    restart: unless-stopped
+    ports:
+      - "${NGINX_HOST_PORT:-80}:80"
+    volumes:
+      # Read-only access to user-uploaded files so the baked public/storage
+      # symlink resolves. Public assets themselves are baked into the image.
+      - app-storage:/var/www/html/storage:ro
+    networks:
+      - internal
+      - external
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "--tries=1",
+             "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE   # bind port 80
+      - CHOWN              # create worker-owned temp dirs
+      - SETGID             # drop worker processes to the nginx group
+      - SETUID             # drop worker processes to the nginx user
+      - DAC_OVERRIDE
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 64M
+
+  # ---------------------------------------------------------------------------
+  # MySQL 8 — primary database
+  # ---------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE:      ${DB_DATABASE}
+      MYSQL_USER:          ${DB_USERNAME}
+      MYSQL_PASSWORD:      ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      # Reduces startup time in containerised environments
+      MYSQL_INITDB_SKIP_TZINFO: "1"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/app.cnf:ro
+    networks:
+      - internal
+    # Never expose 3306 to the host in production.
+    # Uncomment the line below ONLY for local development:
+    # ports:
+    #   - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "--silent",
+             "--host=127.0.0.1",
+             "--user=${DB_USERNAME}",
+             "--password=${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # Required by the MySQL entrypoint to initialise the data directory
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+      - FOWNER
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — cache + queue broker (password injected at runtime, never in argv)
+  # ---------------------------------------------------------------------------
+  redis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: redis
+    image: ecommerce-auth-service-redis:latest
+    restart: unless-stopped
+    env_file:
+      - .env.docker          # provides REDIS_PASSWORD to the secure entrypoint
+    volumes:
+      - redis-data:/data
+    networks:
+      - internal
+    # ports:
+    #   - "127.0.0.1:6379:6379"   # dev only
+    healthcheck:
+      # REDISCLI_AUTH keeps the password out of the process arguments
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # su-exec drops privileges from root to the redis user at startup
+      - SETGID
+      - SETUID
+      - CHOWN
+      - DAC_OVERRIDE
+    tmpfs:
+      - /tmp                 # holds the 0600 runtime requirepass config
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # Queue worker — processes Laravel jobs from Redis
+  # ---------------------------------------------------------------------------
+  queue:
+    image: ecommerce-auth-service:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    command:
+      - php
+      - artisan
+      - queue:work
+      - --queue=default
+      - --sleep=3
+      - --tries=3
+      - --max-time=3600    # restart worker hourly to prevent memory leaks
+      - --memory=128
+    env_file:
+      - .env.docker
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      # Worker role: skips migrations/cache warming (the app container owns them)
+      CONTAINER_ROLE: queue
+    volumes:
+      - app-storage:/var/www/html/storage
+    networks:
+      - internal
+      - egress
+    depends_on:
+      app:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # This container runs queue:work, not php-fpm, so the image's FPM
+    # healthcheck does not apply. Liveness is handled by the restart policy.
+    healthcheck:
+      disable: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Scheduler — runs `php artisan schedule:run` every minute via schedule:work
+  # ---------------------------------------------------------------------------
+  scheduler:
+    image: ecommerce-auth-service:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    command:
+      - php
+      - artisan
+      - schedule:work
+    env_file:
+      - .env.docker
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      CONTAINER_ROLE: scheduler
+    volumes:
+      - app-storage:/var/www/html/storage
+    networks:
+      - internal
+      - egress
+    depends_on:
+      app:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # This container runs schedule:work, not php-fpm, so the image's FPM
+    # healthcheck does not apply. Liveness is handled by the restart policy.
+    healthcheck:
+      disable: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+# =============================================================================
+# Named volumes — all data persisted outside container lifecycle
+# =============================================================================
+volumes:
+  mysql-data:
+    driver: local
+  redis-data:
+    driver: local
+  app-storage:
+    driver: local
+  app-bootstrap-cache:
+    driver: local
+
+# =============================================================================
+# Networks
+#   internal  — service-to-service only; no host or internet access
+#   egress    — outbound internet for app/queue/scheduler (SMTP, external APIs)
+#   external  — nginx bridges to the outside world (inbound)
+# =============================================================================
+networks:
+  internal:
+    driver: bridge
+    internal: true          # no outbound internet access from backend services
+  egress:
+    driver: bridge          # outbound internet for application containers
+  external:
+    driver: bridge
