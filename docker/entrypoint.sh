@@ -97,6 +97,104 @@ run_migrations() {
 }
 
 # ---------------------------------------------------------------------------
+# Rebuild the package manifest so a persistent bootstrap/cache volume can never
+# serve a stale provider list after dependencies change between deploys.
+# ---------------------------------------------------------------------------
+refresh_package_manifest() {
+    log "Refreshing package manifest ..."
+    php artisan package:discover --ansi
+}
+
+# ---------------------------------------------------------------------------
+# Passport: ensure signing keys exist exactly once across all instances.
+#
+# Priority (first match wins):
+#   1. PASSPORT_PRIVATE_KEY + PASSPORT_PUBLIC_KEY env vars (cloud secrets)
+#   2. PASSPORT_*_KEY_FILE mounted secret files → copied to storage once
+#   3. storage/oauth-*.key already on the shared volume → reuse
+#   4. Generate via passport:keys (first boot only, with a lock for races)
+# ---------------------------------------------------------------------------
+passport_keys_configured_via_env() {
+    [ -n "${PASSPORT_PRIVATE_KEY:-}" ] && [ -n "${PASSPORT_PUBLIC_KEY:-}" ]
+}
+
+passport_keys_exist_in_storage() {
+    [ -f storage/oauth-private.key ] && [ -f storage/oauth-public.key ]
+}
+
+import_passport_keys_from_secret_files() {
+    private_file="${PASSPORT_PRIVATE_KEY_FILE:-}"
+    public_file="${PASSPORT_PUBLIC_KEY_FILE:-}"
+
+    if [ -z "${private_file}" ] || [ -z "${public_file}" ]; then
+        return 1
+    fi
+
+    if [ ! -f "${private_file}" ] || [ ! -f "${public_file}" ]; then
+        fail "PASSPORT_*_KEY_FILE is set but the mounted secret file is missing."
+    fi
+
+    if passport_keys_exist_in_storage; then
+        log "Passport keys already present in storage (skipping secret file import)."
+        return 0
+    fi
+
+    log "Importing Passport keys from mounted secret files ..."
+    cp "${private_file}" storage/oauth-private.key
+    cp "${public_file}" storage/oauth-public.key
+    chmod 600 storage/oauth-private.key
+    chmod 644 storage/oauth-public.key
+}
+
+ensure_passport_keys() {
+    if passport_keys_configured_via_env; then
+        log "Passport keys loaded from environment (centralized secret)."
+        return 0
+    fi
+
+    if import_passport_keys_from_secret_files; then
+        return 0
+    fi
+
+    if passport_keys_exist_in_storage; then
+        log "Passport keys already present in storage."
+        return 0
+    fi
+
+    # First boot: only one instance generates; peers wait on the shared volume.
+    lock_dir="storage/framework/passport-keys.lock"
+    if mkdir "${lock_dir}" 2>/dev/null; then
+        if ! passport_keys_exist_in_storage; then
+            log "Generating Passport encryption keys (first run only) ..."
+            php artisan passport:keys --no-interaction
+        fi
+        rmdir "${lock_dir}" 2>/dev/null || true
+        return 0
+    fi
+
+    log "Waiting for another instance to finish Passport key generation ..."
+    attempt=0
+    while [ $attempt -lt 60 ]; do
+        if passport_keys_exist_in_storage; then
+            log "Passport keys available (created by peer instance)."
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+
+    fail "Passport keys were not created. Set PASSPORT_PRIVATE_KEY/PASSPORT_PUBLIC_KEY or check storage permissions."
+}
+
+# ---------------------------------------------------------------------------
+# Seed roles and the OAuth password-grant client (idempotent).
+# ---------------------------------------------------------------------------
+run_seeders() {
+    log "Seeding roles and OAuth client ..."
+    php artisan db:seed --force --no-interaction
+}
+
+# ---------------------------------------------------------------------------
 # 4. Warm caches — dramatically reduces per-request latency
 # ---------------------------------------------------------------------------
 warm_caches() {
@@ -132,8 +230,17 @@ wait_for_mysql
 # Only the primary application container mutates shared state (schema + caches).
 # Worker containers skip these steps to avoid redundant work and migrate races.
 if [ "${CONTAINER_ROLE}" = "app" ]; then
+    # Purge stale bootstrap caches before ANY artisan command. A persisted
+    # config.php built before optional packages (e.g. Scramble) were added will
+    # crash provider boot with config('scramble') === null.
+    rm -f bootstrap/cache/config.php bootstrap/cache/routes-v7.php 2>/dev/null || true
+
     ensure_app_key
+    php artisan config:clear --no-interaction
+    refresh_package_manifest
     run_migrations
+    ensure_passport_keys
+    run_seeders
     warm_caches
     create_storage_link
 else

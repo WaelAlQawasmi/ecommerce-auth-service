@@ -35,4 +35,20 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Laravel Passport — Password Grant Client
+    |--------------------------------------------------------------------------
+    |
+    | Used by AuthService to exchange user credentials for OAuth2 tokens.
+    | In production, inject both values from your secrets manager.
+    | When unset, credentials are read from storage/app/private/oauth/…
+    | (written once by PassportClientSeeder).
+    |
+    */
+    'passport' => [
+        'password_client_id' => env('PASSPORT_PASSWORD_CLIENT_ID'),
+        'password_client_secret' => env('PASSPORT_PASSWORD_CLIENT_SECRET'),
+    ],
+
 ];
