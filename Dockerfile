@@ -17,14 +17,16 @@ RUN apk add --no-cache \
     && docker-php-ext-configure gd \
         --with-freetype \
         --with-jpeg \
-    && docker-php-ext-install -j"$(nproc)" \
+    # Sequential install (-j1) keeps peak RAM low on small hosts (t2/t3.micro).
+    # Parallel extension builds often swap heavily and take much longer overall.
+    && docker-php-ext-install -j1 \
         pdo_mysql \
         bcmath \
         gd \
         intl \
         zip \
-        opcache \
         pcntl \
+        opcache \
     # phpredis (PECL) — Laravel uses Redis for cache, sessions and queues.
     # `yes ''` accepts the default answer for every optional-feature prompt.
     && yes '' | pecl install redis \
