@@ -1,0 +1,376 @@
+================================================================================
+  ECOMMERCE AUTH SERVICE — JWT ACCESS TOKEN INTEGRATION GUIDE
+  For developers building other microservices (Product, Order, Payment, etc.)
+================================================================================
+
+Last updated: 2026-06-20
+Auth service base URL (local): http://localhost
+API version prefix:            /api/v1
+OpenAPI docs:                  GET /docs/api
+
+
+--------------------------------------------------------------------------------
+1. OVERVIEW
+--------------------------------------------------------------------------------
+
+The Auth Service issues OAuth2 access tokens using Laravel Passport.
+Access tokens are self-contained JWTs signed with RSA (algorithm RS256).
+
+Downstream services should:
+  1. Receive the access token from the client (usually via API Gateway).
+  2. Verify the JWT signature using the Auth Service public key.
+  3. Validate standard time claims (exp, nbf, iat).
+  4. Read user identity and roles from the JWT payload.
+  5. Enforce authorization in your own service based on the role claim.
+
+Tokens are sent on every protected request:
+
+  Authorization: Bearer <access_token>
+
+
+--------------------------------------------------------------------------------
+2. HOW TO OBTAIN A TOKEN (for testing)
+--------------------------------------------------------------------------------
+
+Register (creates user + returns token):
+
+  POST /api/v1/auth/register
+  Content-Type: application/json
+  Accept: application/json
+
+  {
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "password": "secret123",
+    "password_confirmation": "secret123",
+    "role": "customer"
+  }
+
+Login (existing user):
+
+  POST /api/v1/auth/login
+  Content-Type: application/json
+  Accept: application/json
+
+  {
+    "email": "jane@example.com",
+    "password": "secret123"
+  }
+
+Both return HTTP 201 (register) or 200 (login) with this envelope:
+
+  {
+    "success": true,
+    "message": "Registration successful.",
+    "data": {
+      "user": { ... },
+      "token": {
+        "access_token": "<JWT>",
+        "refresh_token": "<opaque refresh token>",
+        "token_type": "Bearer",
+        "expires_in": 1296000
+      }
+    }
+  }
+
+
+--------------------------------------------------------------------------------
+3. TOKEN LIFETIMES
+--------------------------------------------------------------------------------
+
+  Access token (JWT):   15 days   (expires_in = 1296000 seconds)
+  Refresh token:        30 days   (opaque, not a JWT)
+
+After logout, the access token is revoked in the Auth Service database.
+A JWT may still verify cryptographically until it expires, but the Auth
+Service will reject it on protected endpoints. For high-security operations,
+optionally confirm the token is still active (see section 8).
+
+
+--------------------------------------------------------------------------------
+4. JWT STRUCTURE
+--------------------------------------------------------------------------------
+
+A JWT has three Base64URL-encoded parts separated by dots:
+
+  header.payload.signature
+
+Example header (decoded):
+
+  {
+    "typ": "JWT",
+    "alg": "RS256"
+  }
+
+Example payload (decoded):
+
+  {
+    "aud": "019ee22d-a876-7000-840d-264ec27292e1",
+    "jti": "6f5bbf66a34053c183807bd3b4d9c989db6527c2e7bf2f0d85ac65bc7f9688c825be95663ba167c2",
+    "iat": 1781920043.36644,
+    "nbf": 1781920043.366443,
+    "exp": 1783216043.295432,
+    "sub": "10",
+    "scopes": [],
+    "id": 10,
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "role": ["customer"]
+  }
+
+
+--------------------------------------------------------------------------------
+5. CLAIM REFERENCE
+--------------------------------------------------------------------------------
+
+STANDARD CLAIMS (OAuth2 / JWT)
+------------------------------
+  aud      string        OAuth2 client UUID (password-grant client).
+  jti      string        Unique token ID (used for revocation tracking).
+  iat      number        Issued-at timestamp (Unix time, may include decimals).
+  nbf      number        Not-before timestamp.
+  exp      number        Expiration timestamp.
+  sub      string        Subject — user ID as a string (same as id).
+  scopes   array         OAuth2 scopes (currently always empty []).
+
+CUSTOM CLAIMS (user profile — use these in your services)
+---------------------------------------------------------
+  id       integer       User primary key.
+  name     string        User display name.
+  email    string        User email address.
+  role     string[]      Role slugs assigned to the user.
+
+ROLE SLUG VALUES
+----------------
+  admin      Full platform administration.
+  support    Staff access (user management, limited admin tasks).
+  customer   Default end-user / shopper role.
+
+A user may have one or more roles. Example: ["customer"] or ["admin"].
+
+IMPORTANT NOTES
+---------------
+  - Prefer "role" (array of slugs) for authorization checks in your service.
+  - "sub" is always a string; use "id" (integer) when you need a numeric user ID.
+  - Claims reflect the user state at token issuance time. If roles change
+    later, the JWT is NOT updated until the user logs in again or refreshes.
+
+
+--------------------------------------------------------------------------------
+6. USING THE TOKEN IN YOUR SERVICE
+--------------------------------------------------------------------------------
+
+Every request to a protected endpoint must include:
+
+  Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...
+
+Example (curl):
+
+  curl -H "Authorization: Bearer <access_token>" \
+       -H "Accept: application/json" \
+       http://localhost/api/v1/auth/me
+
+Example authorization logic (pseudocode):
+
+  claims = verify_and_decode_jwt(token, public_key)
+
+  if "admin" in claims.role:
+      allow_admin_action()
+  elif "customer" in claims.role:
+      allow_customer_action()
+  else:
+      return 403 Forbidden
+
+
+--------------------------------------------------------------------------------
+7. HOW TO VERIFY THE JWT (required for downstream services)
+--------------------------------------------------------------------------------
+
+VERIFICATION STEPS
+------------------
+  1. Split the token into header, payload, signature.
+  2. Confirm header.alg is "RS256" (reject other algorithms).
+  3. Verify the signature using the Auth Service RSA PUBLIC KEY.
+  4. Confirm exp > current time (token not expired).
+  5. Confirm nbf <= current time (token is active).
+  6. Optionally confirm aud matches the expected OAuth client ID.
+  7. Extract id, email, and role from the payload for authorization.
+
+PUBLIC KEY
+----------
+Obtain the PEM public key from the Auth Service operations team.
+Do NOT use the private key in downstream services — only the public key.
+
+Environment variable on Auth Service:
+
+  PASSPORT_PUBLIC_KEY=<PEM content, single line with \n escapes>
+
+Or read from file (inside Auth Service container):
+
+  storage/oauth-public.key
+
+Share the public key securely with each consuming service (env var, secrets
+manager, or mounted file). All Auth Service replicas use the same key pair.
+
+RECOMMENDED LIBRARIES
+---------------------
+  Go:         github.com/golang-jwt/jwt/v5
+  Node.js:    jsonwebtoken
+  Python:     PyJWT
+  Java:       com.auth0:java-jwt
+  PHP:        firebase/php-jwt or lcobucci/jwt
+  .NET:       System.IdentityModel.Tokens.Jwt
+
+Always pass the algorithm explicitly (RS256). Never use "none" or accept
+algorithm from the token header without validation.
+
+
+--------------------------------------------------------------------------------
+8. OPTIONAL — CONFIRM TOKEN STILL ACTIVE (not revoked)
+--------------------------------------------------------------------------------
+
+JWT verification alone is stateless and does NOT detect logout/revocation.
+
+To check whether the Auth Service still accepts a token:
+
+  GET /api/v1/auth/me
+  Authorization: Bearer <access_token>
+  Accept: application/json
+
+  200 OK  → token is valid and not revoked; response includes current user.
+  401     → token expired, revoked, or invalid.
+
+Use this for sensitive operations if you need real-time revocation awareness.
+
+
+--------------------------------------------------------------------------------
+9. REFRESH TOKEN (clients / mobile apps)
+--------------------------------------------------------------------------------
+
+When the access token expires, clients can obtain a new one using the OAuth2
+refresh grant. This calls the Passport token endpoint directly:
+
+  POST /oauth/token
+  Content-Type: application/x-www-form-urlencoded
+  Accept: application/json
+
+  grant_type=refresh_token
+  &refresh_token=<refresh_token>
+  &client_id=<oauth_client_id>
+  &client_secret=<oauth_client_secret>
+
+Response:
+
+  {
+    "token_type": "Bearer",
+    "expires_in": 1296000,
+    "access_token": "<new JWT>",
+    "refresh_token": "<new refresh token>"
+  }
+
+Note: client_id and client_secret are confidential credentials managed by the
+Auth Service team. End-user mobile/web apps typically refresh through an
+API Gateway or BFF, not with raw client secrets.
+
+
+--------------------------------------------------------------------------------
+10. ERROR RESPONSES
+--------------------------------------------------------------------------------
+
+Auth Service API errors use this envelope:
+
+  {
+    "success": false,
+    "message": "Human-readable error message."
+  }
+
+Common HTTP status codes:
+
+  401  Unauthenticated — missing, invalid, expired, or revoked token.
+  403  Forbidden — authenticated but insufficient role/permission.
+  422  Validation error — bad request body.
+  429  Too many requests — rate limited (login/register endpoints).
+
+
+--------------------------------------------------------------------------------
+11. SECURITY CHECKLIST FOR CONSUMING SERVICES
+--------------------------------------------------------------------------------
+
+  [ ] Store only the PUBLIC key, never the private key.
+  [ ] Validate RS256 signature on every request before trusting claims.
+  [ ] Reject tokens with unexpected algorithms (alg != RS256).
+  [ ] Enforce exp / nbf checks with a small clock skew tolerance (e.g. 60s).
+  [ ] Do not log full access tokens in application logs.
+  [ ] Use HTTPS in production between clients, gateway, and services.
+  [ ] Authorize using the "role" claim; do not trust client-supplied user IDs
+      in request bodies without matching them to the verified JWT "id" claim.
+  [ ] Treat JWT claims as a snapshot at login time; re-fetch user data from
+      Auth Service if you need guaranteed up-to-date role assignments.
+
+
+--------------------------------------------------------------------------------
+12. QUICK REFERENCE — VERIFY JWT IN GO
+--------------------------------------------------------------------------------
+
+  import (
+      "github.com/golang-jwt/jwt/v5"
+  )
+
+  func VerifyToken(tokenString string, publicKeyPEM []byte) (jwt.MapClaims, error) {
+      key, err := jwt.ParseRSAPublicKeyFromPEM(publicKeyPEM)
+      if err != nil {
+          return nil, err
+      }
+
+      token, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+          if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
+              return nil, fmt.Errorf("unexpected alg: %v", t.Header["alg"])
+          }
+          return key, nil
+      })
+      if err != nil || !token.Valid {
+          return nil, err
+      }
+
+      claims, ok := token.Claims.(jwt.MapClaims)
+      if !ok {
+          return nil, fmt.Errorf("invalid claims")
+      }
+      return claims, nil
+  }
+
+  // After verification:
+  // userID   := int(claims["id"].(float64))
+  // email    := claims["email"].(string)
+  // roles    := claims["role"].([]interface{})
+
+
+--------------------------------------------------------------------------------
+13. QUICK REFERENCE — VERIFY JWT IN NODE.JS
+--------------------------------------------------------------------------------
+
+  const jwt = require("jsonwebtoken");
+
+  function verifyToken(token, publicKeyPem) {
+    const claims = jwt.verify(token, publicKeyPem, { algorithms: ["RS256"] });
+    return {
+      id: claims.id,
+      email: claims.email,
+      role: claims.role,   // string[]
+      sub: claims.sub,
+    };
+  }
+
+
+--------------------------------------------------------------------------------
+14. CONTACT / OPS
+--------------------------------------------------------------------------------
+
+  - Public key rotation: coordinate with Auth Service ops before key change.
+  - After key rotation, all services must update PASSPORT_PUBLIC_KEY and
+    redeploy; old tokens signed with the previous key will fail verification.
+  - Interactive API documentation: GET /docs/api (Scramble OpenAPI UI).
+
+================================================================================
+  END OF DOCUMENT
+================================================================================
