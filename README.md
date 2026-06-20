@@ -506,12 +506,12 @@ The fastest way to get the application running with MySQL, Redis, and Nginx:
 
 **Windows:**
 ```bash
-docker-start.bat
+run-production.bat
 ```
 
 **macOS/Linux:**
 ```bash
-bash docker-start.sh
+bash run-production.sh
 ```
 
 Or run directly:
