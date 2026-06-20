@@ -235,7 +235,11 @@ services:
   # Queue worker — processes Laravel jobs from Redis
   # ---------------------------------------------------------------------------
   queue:
-    image: ecommerce-auth-service:latest   # built by the app service
+    image: ecommerce-auth-service:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
     restart: unless-stopped
     command:
       - php
@@ -286,7 +290,11 @@ services:
   # Scheduler — runs `php artisan schedule:run` every minute via schedule:work
   # ---------------------------------------------------------------------------
   scheduler:
-    image: ecommerce-auth-service:latest   # built by the app service
+    image: ecommerce-auth-service:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
     restart: unless-stopped
     command:
       - php
