@@ -1,8 +1,11 @@
 .PHONY: help build up down logs bash app-bash migrate seed tinker test ps
 
-# Route every compose command through .env.docker so ${DB_*}/${REDIS_*}
-# interpolation resolves consistently (Compose only auto-reads ./.env otherwise).
-COMPOSE := docker-compose --env-file .env.docker
+# Route compose interpolation through .env.docker (+ optional .env.docker.local).
+COMPOSE_ENV := --env-file .env.docker
+ifneq (,$(wildcard .env.docker.local))
+COMPOSE_ENV += --env-file .env.docker.local
+endif
+COMPOSE := docker-compose $(COMPOSE_ENV)
 
 # Default target
 help:

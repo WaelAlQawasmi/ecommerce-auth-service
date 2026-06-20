@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\RoleSlug;
+use App\Events\UserRegistered;
 use App\Models\User;
 use App\Repositories\Contracts\RoleRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
@@ -24,7 +25,7 @@ class AuthService
     /**
      * Register a new user, assign the default role and issue a token.
      *
-     * @param  array{name: string, email: string, password: string}  $data
+     * @param  array{name: string, email: string, password: string, role?: string}  $data
      * @return array{user: User, token: array<string, mixed>}
      */
     public function register(array $data): array
@@ -36,7 +37,8 @@ class AuthService
                 'password' => $data['password'],
             ]);
 
-            $role = $this->roles->findBySlug(RoleSlug::User->value);
+            $roleSlug = $data['role'] ?? RoleSlug::Customer->value;
+            $role = $this->roles->findBySlug($roleSlug);
 
             if ($role !== null) {
                 $this->users->assignRole($user, $role);
@@ -44,6 +46,8 @@ class AuthService
 
             return $user;
         });
+
+        UserRegistered::dispatch($user);
 
         return [
             'user' => $user->load('roles'),

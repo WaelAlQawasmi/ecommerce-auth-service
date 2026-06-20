@@ -1,6 +1,5 @@
 <?php
 
-use App\Http\Middleware\EnsureRole;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\RoleController;
 use App\Http\Controllers\Api\V1\UserController;
@@ -28,10 +27,19 @@ Route::prefix('auth')->name('auth.')->group(function () {
 });
 
 Route::middleware('auth:api')->group(function () {
+    Route::middleware('role:admin,support')->group(function () {
+        Route::get('users', [UserController::class, 'index'])->name('users.index');
+        Route::get('users/search', [UserController::class, 'search'])->name('users.search');
+        Route::get('users/count', [UserController::class, 'count'])->name('users.count');
+    });
+
     Route::delete('users/{user}', [UserController::class, 'destroy'])->name('users.destroy');
 
     Route::middleware('role:admin')->group(function () {
         Route::get('roles', [RoleController::class, 'index'])->name('roles.index');
+    });
+
+    Route::middleware(['role:admin,support', 'admin_for_non_customer_role'])->group(function () {
         Route::post('users/{user}/roles', [UserRoleController::class, 'store'])->name('users.roles.store');
     });
 });

@@ -17,11 +17,18 @@ class UserRoleController extends ApiController
     public function __construct(private readonly UserService $users) {}
 
     /**
-     * Assign a role to a user (admin only).
+     * Assign a role to a user.
+     *
+     * Staff may assign the customer role; only administrators may assign admin or support roles.
+     * Authorized by {@see \App\Policies\UserPolicy::assignRole}.
      */
     public function store(AssignRoleRequest $request, User $user): JsonResponse
     {
-        $updated = $this->users->assignRole($user, $request->validated('role'));
+        $role = $request->validated('role');
+
+        $this->authorize('assignRole', [$user, $role]);
+
+        $updated = $this->users->assignRole($user, $role);
 
         return ApiResponse::success(
             data: new UserResource($updated),

@@ -8,15 +8,17 @@ The Auth Service is responsible for managing user authentication and authorizati
 
 ### Features
 
-* User Registration
-* User Login
-* User Logout
-* OAuth2 Authentication
-* JWT Access Tokens
-* Refresh Tokens
-* Role-Based Access Control (RBAC)
-* Kafka Event Publishing
-* Redis Caching
+* User Registration (default **customer** role)
+* User Login / Logout
+* OAuth2 Authentication (Laravel Passport)
+* JWT Access Tokens & Refresh Tokens
+* Role-Based Access Control (admin, support, customer)
+* Paginated user listing (admin & support)
+* User search by email (admin & support)
+* Cached user count endpoint (admin & support)
+* Welcome email on registration (queued)
+* Soft-delete user accounts
+* OpenAPI documentation (Scramble)
 * Docker Support
 
 ---
@@ -25,7 +27,7 @@ The Auth Service is responsible for managing user authentication and authorizati
 
 | Component         | Technology       |
 | ----------------- | ---------------- |
-| Language          | PHP 8.5          |
+| Language          | PHP 8.3+         |
 | Framework         | Laravel          |
 | Authentication    | Laravel Passport |
 | Database          | MySQL            |
@@ -95,10 +97,25 @@ Examples:
 
 ## API Endpoints
 
+All endpoints are versioned under `/api/v1`. Responses use a standard envelope:
+
+```json
+{
+  "success": true,
+  "message": "OK",
+  "data": {},
+  "meta": {}
+}
+```
+
+Protected routes require `Authorization: Bearer {access_token}`.
+
+---
+
 ### Register
 
 ```http
-POST /api/register
+POST /api/v1/auth/register
 ```
 
 Request:
@@ -107,16 +124,21 @@ Request:
 {
   "name": "John Doe",
   "email": "john@example.com",
-  "password": "secret123"
+  "password": "secret123",
+  "password_confirmation": "secret123"
 }
 ```
+
+New users are assigned the **customer** role by default and receive a **welcome email** (queued).
+
+Optional `role` field: only an authenticated **admin** may register a user with `admin` or `support` roles. Public registration always uses `customer`.
 
 ---
 
 ### Login
 
 ```http
-POST /api/login
+POST /api/v1/auth/login
 ```
 
 Request:
@@ -132,9 +154,17 @@ Response:
 
 ```json
 {
-  "access_token": "jwt-token",
-  "token_type": "Bearer",
-  "expires_in": 3600
+  "success": true,
+  "message": "Login successful.",
+  "data": {
+    "user": { "id": 1, "name": "John Doe", "email": "john@example.com", "roles": [] },
+    "token": {
+      "access_token": "jwt-token",
+      "refresh_token": "refresh-token",
+      "token_type": "Bearer",
+      "expires_in": 1296000
+    }
+  }
 }
 ```
 
@@ -143,16 +173,140 @@ Response:
 ### Logout
 
 ```http
-POST /api/logout
+POST /api/v1/auth/logout
 ```
+
+Requires authentication.
 
 ---
 
 ### Current User
 
 ```http
-GET /api/me
+GET /api/v1/auth/me
 ```
+
+Requires authentication. Returns the authenticated user profile with roles.
+
+---
+
+### List Users (paginated)
+
+```http
+GET /api/v1/users?page=1&per_page=15
+```
+
+Requires authentication. Restricted to **admin** and **support** roles.
+
+Query parameters:
+
+| Parameter  | Type    | Default | Description              |
+| ---------- | ------- | ------- | ------------------------ |
+| `page`     | integer | 1       | Page number              |
+| `per_page` | integer | 15      | Items per page (max 100) |
+
+---
+
+### Search Users by Email
+
+```http
+GET /api/v1/users/search?email=john
+```
+
+Requires authentication. Restricted to **admin** and **support** roles.
+
+Performs a partial, case-insensitive match on the email field.
+
+---
+
+### User Count
+
+```http
+GET /api/v1/users/count
+```
+
+Requires authentication. Restricted to **admin** and **support** roles.
+
+Returns the total number of active (non-deleted) users. The count is cached for performance and automatically invalidated when users are created or soft-deleted.
+
+---
+
+### Delete User
+
+```http
+DELETE /api/v1/users/{user}
+```
+
+Requires authentication. Users may delete their own account; administrators may delete any account.
+
+---
+
+### List Roles
+
+```http
+GET /api/v1/roles
+```
+
+Requires authentication. Restricted to **admin** role only.
+
+---
+
+### Assign Role to User
+
+```http
+POST /api/v1/users/{user}/roles
+```
+
+Requires authentication. **Admin** and **support** staff may access this endpoint.
+
+| Role being assigned | Who can assign        |
+| ------------------- | --------------------- |
+| `customer`          | Admin or support      |
+| `admin`, `support`  | Admin only            |
+
+Enforced by `EnsureAdminForNonCustomerRole` middleware and `UserPolicy::assignRole`.
+
+Request:
+
+```json
+{
+  "role": "support"
+}
+```
+
+---
+
+## Roles
+
+| Slug       | Name          | Description                              |
+| ---------- | ------------- | ---------------------------------------- |
+| `admin`    | Administrator | Full administrative access               |
+| `support`  | Support       | Read access to user management endpoints   |
+| `customer` | Customer      | Default role for registered users        |
+
+Staff-only endpoints (`/api/v1/users`, `/api/v1/users/search`, `/api/v1/users/count`) require the authenticated user to have the **admin** or **support** role.
+
+---
+
+## Email & Queues
+
+On registration, a `UserRegistered` event dispatches a queued `SendWelcomeEmail` listener that sends a welcome message to the new user.
+
+User create/delete events flush the cached user count via `FlushUserCountCache`.
+
+Configure mail and queue in `.env`:
+
+```env
+MAIL_MAILER=smtp
+MAIL_HOST=mailpit
+MAIL_PORT=1025
+MAIL_FROM_ADDRESS=noreply@example.com
+MAIL_FROM_NAME="${APP_NAME}"
+
+QUEUE_CONNECTION=redis
+```
+
+For local development with Docker, use `log` or `smtp` (Mailpit) for mail and `redis` or `sync` for queues.
 
 ---
 
@@ -218,21 +372,37 @@ Authorized Request
 
 ### roles
 
-| Column | Type    |
-| ------ | ------- |
-| id     | bigint  |
-| name   | varchar |
+| Column      | Type      |
+| ----------- | --------- |
+| id          | bigint    |
+| name        | varchar   |
+| slug        | varchar   |
+| description | text      |
+| created_at  | timestamp |
 
 ---
 
-### permissions
+### role_user
 
-| Column | Type    |
-| ------ | ------- |
-| id     | bigint  |
-| name   | varchar |
+Pivot table linking users to roles.
 
 ---
+
+## Testing
+
+Run the test suite:
+
+```bash
+php artisan test
+```
+
+Or with Docker:
+
+```bash
+docker-compose exec app php artisan test
+```
+
+Tests cover role definitions, user repository queries, user management authorization (admin/support vs customer), and registration role assignment.
 
 ## Kafka Topics
 

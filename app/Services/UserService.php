@@ -5,6 +5,9 @@ namespace App\Services;
 use App\Models\User;
 use App\Repositories\Contracts\RoleRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
+use App\Support\Cache\UserCountCache;
+use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
 class UserService
@@ -13,6 +16,32 @@ class UserService
         private readonly UserRepositoryInterface $users,
         private readonly RoleRepositoryInterface $roles,
     ) {}
+
+    /**
+     * Paginate all users.
+     */
+    public function paginate(int $perPage = 15): LengthAwarePaginator
+    {
+        return $this->users->paginate($perPage);
+    }
+
+    /**
+     * Search users by partial email match.
+     *
+     * @return Collection<int, User>
+     */
+    public function searchByEmail(string $email): Collection
+    {
+        return $this->users->searchByEmail(strtolower(trim($email)));
+    }
+
+    /**
+     * Count active users (cached; invalidated on create/delete).
+     */
+    public function count(): int
+    {
+        return UserCountCache::remember(fn (): int => $this->users->count());
+    }
 
     /**
      * Assign a role (by slug) to the given user.

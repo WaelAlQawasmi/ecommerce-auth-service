@@ -12,7 +12,8 @@ class RoleSeeder extends Seeder
     {
         $roles = [
             [RoleSlug::Admin, 'Administrator', 'Full administrative access.'],
-            [RoleSlug::User, 'User', 'Standard application user.'],
+            [RoleSlug::Support, 'Support', 'Support staff with read access to user data.'],
+            [RoleSlug::Customer, 'Customer', 'Standard customer account.'],
         ];
 
         foreach ($roles as [$slug, $name, $description]) {

@@ -57,6 +57,7 @@ COPY . .
 # bootstrap/cache is excluded by .dockerignore, so recreate it before the
 # autoload dump — package:discover (post-autoload-dump) writes packages.php here.
 RUN mkdir -p bootstrap/cache \
+    && chmod 775 bootstrap/cache \
     && composer dump-autoload \
         --optimize \
         --classmap-authoritative \

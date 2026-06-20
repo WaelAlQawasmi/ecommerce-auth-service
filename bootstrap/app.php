@@ -1,6 +1,7 @@
 <?php
 
 use App\Support\Http\ApiResponse;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -19,6 +20,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'role' => \App\Http\Middleware\EnsureRole::class,
+            'admin_for_non_customer_role' => \App\Http\Middleware\EnsureAdminForNonCustomerRole::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
@@ -29,6 +31,15 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (AuthenticationException $e, Request $request) {
             if ($request->is('api/*')) {
                 return ApiResponse::error('Unauthenticated.', Response::HTTP_UNAUTHORIZED);
+            }
+        });
+
+        $exceptions->render(function (AuthorizationException $e, Request $request) {
+            if ($request->is('api/*')) {
+                return ApiResponse::error(
+                    $e->getMessage() ?: 'This action is unauthorized.',
+                    Response::HTTP_FORBIDDEN,
+                );
             }
         });
 

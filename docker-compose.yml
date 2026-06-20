@@ -23,6 +23,12 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+# Base env + optional local overrides (.env.docker.local is gitignored).
+x-app-env-files: &app-env-files
+  - .env.docker
+  - path: .env.docker.local
+    required: false
+
 services:
 
   # ---------------------------------------------------------------------------
@@ -35,8 +41,7 @@ services:
       target: production           # explicit target for clarity
     image: ecommerce-auth-service:latest
     restart: unless-stopped
-    env_file:
-      - .env.docker
+    env_file: *app-env-files
     environment:
       # Force production mode inside the container regardless of .env
       APP_ENV: production
@@ -138,10 +143,10 @@ services:
     image: mysql:8.4
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE:      ${DB_DATABASE}
-      MYSQL_USER:          ${DB_USERNAME}
-      MYSQL_PASSWORD:      ${DB_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE:      ${DB_DATABASE:-ecommerce_auth}
+      MYSQL_USER:          ${DB_USERNAME:-auth_user}
+      MYSQL_PASSWORD:      ${DB_PASSWORD:-authpassword123}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword123}
       # Reduces startup time in containerised environments
       MYSQL_INITDB_SKIP_TZINFO: "1"
     volumes:
@@ -245,8 +250,7 @@ services:
       - --tries=3
       - --max-time=3600    # restart worker hourly to prevent memory leaks
       - --memory=128
-    env_file:
-      - .env.docker
+    env_file: *app-env-files
     environment:
       APP_ENV: production
       APP_DEBUG: "false"
@@ -296,8 +300,7 @@ services:
       - php
       - artisan
       - schedule:work
-    env_file:
-      - .env.docker
+    env_file: *app-env-files
     environment:
       APP_ENV: production
       APP_DEBUG: "false"

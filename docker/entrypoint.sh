@@ -106,17 +106,84 @@ refresh_package_manifest() {
 }
 
 # ---------------------------------------------------------------------------
-# Passport: generate signing keys (only if absent so tokens stay valid across
-# restarts). Keys live in the shared storage volume so queue/scheduler can
-# validate tokens too.
+# Passport: ensure signing keys exist exactly once across all instances.
+#
+# Priority (first match wins):
+#   1. PASSPORT_PRIVATE_KEY + PASSPORT_PUBLIC_KEY env vars (cloud secrets)
+#   2. PASSPORT_*_KEY_FILE mounted secret files → copied to storage once
+#   3. storage/oauth-*.key already on the shared volume → reuse
+#   4. Generate via passport:keys (first boot only, with a lock for races)
 # ---------------------------------------------------------------------------
-ensure_passport_keys() {
-    if [ ! -f storage/oauth-private.key ]; then
-        log "Generating Passport encryption keys ..."
-        php artisan passport:keys --no-interaction
-    else
-        log "Passport keys already present."
+passport_keys_configured_via_env() {
+    [ -n "${PASSPORT_PRIVATE_KEY:-}" ] && [ -n "${PASSPORT_PUBLIC_KEY:-}" ]
+}
+
+passport_keys_exist_in_storage() {
+    [ -f storage/oauth-private.key ] && [ -f storage/oauth-public.key ]
+}
+
+import_passport_keys_from_secret_files() {
+    private_file="${PASSPORT_PRIVATE_KEY_FILE:-}"
+    public_file="${PASSPORT_PUBLIC_KEY_FILE:-}"
+
+    if [ -z "${private_file}" ] || [ -z "${public_file}" ]; then
+        return 1
     fi
+
+    if [ ! -f "${private_file}" ] || [ ! -f "${public_file}" ]; then
+        fail "PASSPORT_*_KEY_FILE is set but the mounted secret file is missing."
+    fi
+
+    if passport_keys_exist_in_storage; then
+        log "Passport keys already present in storage (skipping secret file import)."
+        return 0
+    fi
+
+    log "Importing Passport keys from mounted secret files ..."
+    cp "${private_file}" storage/oauth-private.key
+    cp "${public_file}" storage/oauth-public.key
+    chmod 600 storage/oauth-private.key
+    chmod 644 storage/oauth-public.key
+}
+
+ensure_passport_keys() {
+    if passport_keys_configured_via_env; then
+        log "Passport keys loaded from environment (centralized secret)."
+        return 0
+    fi
+
+    if import_passport_keys_from_secret_files; then
+        return 0
+    fi
+
+    if passport_keys_exist_in_storage; then
+        log "Passport keys already present in storage."
+        return 0
+    fi
+
+    # First boot: only one instance generates; peers wait on the shared volume.
+    lock_dir="storage/framework/passport-keys.lock"
+    if mkdir "${lock_dir}" 2>/dev/null; then
+        if ! passport_keys_exist_in_storage; then
+            log "Generating Passport encryption keys (first run only) ..."
+            php artisan passport:keys --no-interaction
+        fi
+        rmdir "${lock_dir}" 2>/dev/null || true
+        return 0
+    fi
+
+    log "Waiting for another instance to finish Passport key generation ..."
+    attempt=0
+    while [ $attempt -lt 60 ]; do
+        if passport_keys_exist_in_storage; then
+            log "Passport keys available (created by peer instance)."
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+
+    fail "Passport keys were not created. Set PASSPORT_PRIVATE_KEY/PASSPORT_PUBLIC_KEY or check storage permissions."
 }
 
 # ---------------------------------------------------------------------------
