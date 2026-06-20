@@ -12,11 +12,16 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-# Check if Docker Compose is installed
-if ! command -v docker-compose &> /dev/null; then
-    echo "ERROR: Docker Compose is not installed. Please install Docker Compose first."
-    exit 1
-fi
+compose() {
+    if command -v docker-compose &> /dev/null; then
+        docker-compose "$@"
+    elif docker compose version &> /dev/null; then
+        docker compose "$@"
+    else
+        echo "ERROR: Docker Compose is not installed. Please install Docker Compose first."
+        exit 1
+    fi
+}
 
 echo "✓ Docker and Docker Compose are installed"
 echo ""
@@ -35,16 +40,16 @@ echo "Building and starting containers..."
 echo ""
 
 # Build and start containers
-docker-compose up -d --build
+compose up -d --build
 
 echo ""
 echo "Waiting for services to be healthy..."
 sleep 5
 
 # Check if all services are running
-if docker-compose ps | grep -q "unhealthy\|Exit"; then
+if compose ps | grep -q "unhealthy\|Exit"; then
     echo "WARNING: Some services are not healthy. Checking logs..."
-    docker-compose logs
+    compose logs
 else
     echo "✓ All services are running"
 fi
@@ -57,11 +62,11 @@ echo ""
 echo "Application is running at: http://localhost"
 echo ""
 echo "Useful commands:"
-echo "  docker-compose logs -f app      # View app logs"
-echo "  docker-compose exec app php artisan migrate  # Run migrations"
-echo "  docker-compose exec app php artisan db:seed  # Run seeders"
-echo "  docker-compose ps               # Show container status"
-echo "  docker-compose down             # Stop containers"
+echo "  docker compose logs -f app      # View app logs"
+echo "  docker compose exec app php artisan migrate  # Run migrations"
+echo "  docker compose exec app php artisan db:seed  # Run seeders"
+echo "  docker compose ps               # Show container status"
+echo "  docker compose down             # Stop containers"
 echo ""
 echo "Database credentials:"
 echo "  Host: localhost:3306"
