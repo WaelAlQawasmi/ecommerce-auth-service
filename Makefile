@@ -5,7 +5,11 @@ COMPOSE_ENV := --env-file .env.docker
 ifneq (,$(wildcard .env.docker.local))
 COMPOSE_ENV += --env-file .env.docker.local
 endif
+ifneq (, $(shell command -v docker-compose 2>/dev/null))
 COMPOSE := docker-compose $(COMPOSE_ENV)
+else
+COMPOSE := docker compose $(COMPOSE_ENV)
+endif
 
 # Default target
 help:
