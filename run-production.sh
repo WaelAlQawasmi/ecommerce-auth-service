@@ -38,9 +38,12 @@ else
 fi
 
 echo ""
-echo "Building and starting Docker containers..."
+echo "Building Docker images..."
+compose build
 
-compose up -d --build
+echo ""
+echo "Starting Docker containers..."
+compose up -d
 
 echo ""
 echo "Waiting for containers to stabilise..."

@@ -36,11 +36,16 @@ else
 fi
 
 echo ""
-echo "Building and starting containers..."
+echo "Building Docker images..."
 echo ""
 
-# Build and start containers
-compose up -d --build
+compose build
+
+echo ""
+echo "Starting containers..."
+echo ""
+
+compose up -d
 
 echo ""
 echo "Waiting for services to be healthy..."
