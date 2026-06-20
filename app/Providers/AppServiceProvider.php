@@ -14,7 +14,6 @@ use Dedoc\Scramble\Support\Generator\OpenApi;
 use Dedoc\Scramble\Support\Generator\SecurityScheme;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
-use Laravel\Passport\Passport;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -36,11 +35,6 @@ class AppServiceProvider extends ServiceProvider
         Event::listen(UserRegistered::class, SendWelcomeEmail::class);
         Event::listen(UserCreated::class, FlushUserCountCache::class);
         Event::listen(UserDeleted::class, FlushUserCountCache::class);
-
-        Passport::enablePasswordGrant();
-
-        Passport::tokensExpireIn(now()->addDays(15));
-        Passport::refreshTokensExpireIn(now()->addDays(30));
 
         Scramble::configure()
             ->withDocumentTransformers(function (OpenApi $openApi): void {

@@ -37,6 +37,37 @@ class AuthRegistrationTest extends TestCase
             ->assertJsonPath('data.user.email', 'wael@admin.com');
     }
 
+    public function test_access_token_jwt_contains_user_profile_claims(): void
+    {
+        Mail::fake();
+
+        $response = $this->postJson('/api/v1/auth/register', [
+            'name' => 'Jane Customer',
+            'email' => 'jwt-claims@example.com',
+            'password' => 'Password123!',
+            'password_confirmation' => 'Password123!',
+        ])->assertCreated();
+
+        $token = $response->json('data.token.access_token');
+        $payload = $this->decodeJwtPayload($token);
+
+        $this->assertSame('jwt-claims@example.com', $payload['email']);
+        $this->assertSame('Jane Customer', $payload['name']);
+        $this->assertSame([RoleSlug::Customer->value], $payload['role']);
+        $this->assertNotEmpty($payload['id']);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodeJwtPayload(string $jwt): array
+    {
+        $segments = explode('.', $jwt);
+        $payload = base64_decode(strtr($segments[1], '-_', '+/'), true);
+
+        return json_decode($payload ?: '{}', true, flags: JSON_THROW_ON_ERROR);
+    }
+
     public function test_registration_assigns_customer_role(): void
     {
         Mail::fake();
