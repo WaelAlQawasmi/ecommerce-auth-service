@@ -96,7 +96,7 @@ services:
     image: ecommerce-auth-service-nginx:latest
     restart: unless-stopped
     ports:
-      - "${NGINX_HOST_PORT:-80}:80"
+      - "${NGINX_HOST_PORT:-8080}:80"
     volumes:
       # Read-only access to user-uploaded files so the baked public/storage
       # symlink resolves. Public assets themselves are baked into the image.
@@ -142,12 +142,18 @@ services:
   mysql:
     image: mysql:8.4
     restart: unless-stopped
+    command: >
+      --innodb-buffer-pool-size=128M
+      --innodb-log-buffer-size=32M
+      --max-connections=50
+      --performance-schema=OFF
+    mem_limit: 512m
+    memswap_limit: 1g
     environment:
       MYSQL_DATABASE:      ${DB_DATABASE:-ecommerce_auth}
       MYSQL_USER:          ${DB_USERNAME:-auth_user}
       MYSQL_PASSWORD:      ${DB_PASSWORD:-authpassword123}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword123}
-      # Reduces startup time in containerised environments
       MYSQL_INITDB_SKIP_TZINFO: "1"
     volumes:
       - mysql-data:/var/lib/mysql
@@ -160,33 +166,24 @@ services:
     #   - "127.0.0.1:3306:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "--silent",
-             "--host=127.0.0.1",
-             "--user=${DB_USERNAME}",
-             "--password=${DB_PASSWORD}"]
+            "--host=127.0.0.1",
+            "--user=${DB_USERNAME}",
+            "--password=${DB_PASSWORD}"]
       interval: 10s
       timeout: 5s
-      start_period: 30s
+      start_period: 60s
       retries: 10
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     cap_add:
-      # Required by the MySQL entrypoint to initialise the data directory
       - CHOWN
       - SETGID
       - SETUID
       - DAC_OVERRIDE
       - FOWNER
     logging: *default-logging
-    deploy:
-      resources:
-        limits:
-          cpus: "1.00"
-          memory: 512M
-        reservations:
-          memory: 256M
-
   # ---------------------------------------------------------------------------
   # Redis 7 — cache + queue broker (password injected at runtime, never in argv)
   # ---------------------------------------------------------------------------
