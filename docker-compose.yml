@@ -96,7 +96,7 @@ services:
     image: ecommerce-auth-service-nginx:latest
     restart: unless-stopped
     ports:
-      - "${NGINX_HOST_PORT:-80}:80"
+      - "${NGINX_HOST_PORT:-8080}:80"
     volumes:
       # Read-only access to user-uploaded files so the baked public/storage
       # symlink resolves. Public assets themselves are baked into the image.
