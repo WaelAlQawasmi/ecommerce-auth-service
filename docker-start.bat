@@ -32,22 +32,43 @@ if not exist .env (
     echo ✓ .env file already exists
 )
 
+REM Enable bundled PostgreSQL unless DOCKER_DB_ENABLED=false in env files
+set DOCKER_DB_ENABLED=
+if exist .env.docker.local (
+    for /f "usebackq tokens=1,* delims==" %%A in (`findstr /b /r "DOCKER_DB_ENABLED=" .env.docker.local`) do set DOCKER_DB_ENABLED=%%B
+)
+if not defined DOCKER_DB_ENABLED (
+    for /f "usebackq tokens=1,* delims==" %%A in (`findstr /b /r "DOCKER_DB_ENABLED=" .env.docker`) do set DOCKER_DB_ENABLED=%%B
+)
+if not defined DOCKER_DB_ENABLED set DOCKER_DB_ENABLED=true
+
+if /i "%DOCKER_DB_ENABLED%"=="false" (
+    set COMPOSE_PROFILES=
+    echo → External database mode (DOCKER_DB_ENABLED=false)
+) else (
+    set COMPOSE_PROFILES=docker-db
+    echo → Bundled PostgreSQL enabled (DOCKER_DB_ENABLED=true)
+)
+
+set COMPOSE_ARGS=--env-file .env.docker
+if exist .env.docker.local set COMPOSE_ARGS=%COMPOSE_ARGS% --env-file .env.docker.local
+
 echo.
 echo Building and starting containers...
 echo.
 
 REM Build and start containers
-docker-compose up -d --build
+docker-compose %COMPOSE_ARGS% up -d --build
 
 echo.
 echo Waiting for services to be healthy...
 timeout /t 5 /nobreak
 
 REM Check if containers are running
-docker-compose ps | find "unhealthy" >nul 2>nul
+docker-compose %COMPOSE_ARGS% ps | find "unhealthy" >nul 2>nul
 if %errorlevel% equ 0 (
     echo WARNING: Some services are not healthy. Checking logs...
-    docker-compose logs
+    docker-compose %COMPOSE_ARGS% logs
 ) else (
     echo ✓ All services are running
 )
@@ -67,10 +88,14 @@ echo   docker-compose ps               # Show container status
 echo   docker-compose down             # Stop containers
 echo.
 echo Database credentials:
-echo   Host: localhost:3306
-echo   User: auth_user
-echo   Password: authpassword123
-echo   Database: ecommerce_auth
+if /i "%DOCKER_DB_ENABLED%"=="false" (
+    echo   Using external database — see DB_HOST in .env.docker / .env.docker.local
+) else (
+    echo   Host: localhost:5432 (container: postgres)
+    echo   User: auth_user
+    echo   Password: authpassword123
+    echo   Database: ecommerce_auth
+)
 echo.
 echo For more information, see DOCKER.md
 echo.

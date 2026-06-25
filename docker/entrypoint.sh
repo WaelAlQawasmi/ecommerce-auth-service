@@ -3,7 +3,7 @@
 # docker-entrypoint.sh — Laravel container initialisation
 #
 # Runs BEFORE php-fpm starts. Handles:
-#   1. Waiting for MySQL to be reachable (with exponential backoff)
+#   1. Waiting for PostgreSQL to be reachable (with exponential backoff)
 #   2. Running database migrations (--isolated prevents concurrent runs)
 #   3. Warming the Laravel config/route/view caches
 #   4. Creating the storage symlink if missing
@@ -34,43 +34,41 @@ warn() { printf "${YELLOW}[entrypoint]${NC} %s\n" "$*"; }
 fail() { printf "${RED}[entrypoint]${NC} %s\n" "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 1. Wait for MySQL with exponential backoff
-#    Does NOT pass the password as a CLI argument — uses MYSQL_PWD instead
-#    so it never appears in `ps` output.
+# 1. Wait for PostgreSQL with exponential backoff
+#    Uses PGPASSWORD so the password never appears in `ps` output.
 # ---------------------------------------------------------------------------
-wait_for_mysql() {
-    local host="${DB_HOST:-mysql}"
-    local port="${DB_PORT:-3306}"
+wait_for_postgres() {
+    local host="${DB_HOST:-postgres}"
+    local port="${DB_PORT:-5432}"
     local user="${DB_USERNAME:-laravel}"
+    local database="${DB_DATABASE:-laravel}"
     local max_attempts=30
     local attempt=0
     local wait=2
 
-    log "Waiting for MySQL at ${host}:${port} ..."
+    log "Waiting for PostgreSQL at ${host}:${port} ..."
 
     while [ $attempt -lt $max_attempts ]; do
         attempt=$((attempt + 1))
 
-        # MYSQL_PWD is the safe way to supply a password to mysql client tools
-        if MYSQL_PWD="${DB_PASSWORD}" mysqladmin \
-                ping \
+        if PGPASSWORD="${DB_PASSWORD}" pg_isready \
                 --host="${host}" \
                 --port="${port}" \
-                --user="${user}" \
-                --silent \
-                --connect-timeout=3 \
+                --username="${user}" \
+                --dbname="${database}" \
+                --quiet \
                 2>/dev/null; then
-            log "MySQL is ready (attempt ${attempt}/${max_attempts})."
+            log "PostgreSQL is ready (attempt ${attempt}/${max_attempts})."
             return 0
         fi
 
-        warn "MySQL not ready yet (attempt ${attempt}/${max_attempts}). Retrying in ${wait}s ..."
+        warn "PostgreSQL not ready yet (attempt ${attempt}/${max_attempts}). Retrying in ${wait}s ..."
         sleep "${wait}"
         # Exponential backoff capped at 30 s
         wait=$(( wait < 30 ? wait * 2 : 30 ))
     done
 
-    fail "MySQL did not become ready after ${max_attempts} attempts. Aborting."
+    fail "PostgreSQL did not become ready after ${max_attempts} attempts. Aborting."
 }
 
 # ---------------------------------------------------------------------------
@@ -225,7 +223,7 @@ create_storage_link() {
 # Main
 # =============================================================================
 # Every role needs the database to be reachable before starting.
-wait_for_mysql
+wait_for_postgres
 
 # Only the primary application container mutates shared state (schema + caches).
 # Worker containers skip these steps to avoid redundant work and migrate races.

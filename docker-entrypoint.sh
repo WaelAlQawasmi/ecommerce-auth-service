@@ -3,13 +3,13 @@
 # Exit on error
 set -e
 
-echo "Waiting for MySQL to be ready..."
-while ! mysqladmin ping -h"mysql" -u"${DB_USERNAME}" -p"${DB_PASSWORD}" --silent; do
-    echo "Waiting for MySQL..."
+echo "Waiting for PostgreSQL to be ready..."
+while ! PGPASSWORD="${DB_PASSWORD}" pg_isready -h "${DB_HOST:-postgres}" -p "${DB_PORT:-5432}" -U "${DB_USERNAME}" -d "${DB_DATABASE}" -q; do
+    echo "Waiting for PostgreSQL..."
     sleep 1
 done
 
-echo "MySQL is ready!"
+echo "PostgreSQL is ready!"
 
 # Check if .env file exists, if not copy from .env.docker
 if [ ! -f .env ]; then

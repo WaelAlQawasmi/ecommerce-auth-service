@@ -14,13 +14,14 @@ RUN apk add --no-cache \
         icu-dev \
         libzip-dev \
         oniguruma-dev \
+        postgresql-dev \
     && docker-php-ext-configure gd \
         --with-freetype \
         --with-jpeg \
     # Sequential install (-j1) keeps peak RAM low on small hosts (t2/t3.micro).
     # Parallel extension builds often swap heavily and take much longer overall.
     && docker-php-ext-install -j1 \
-        pdo_mysql \
+        pdo_pgsql \
         bcmath \
         gd \
         intl \
@@ -86,8 +87,8 @@ RUN apk add --no-cache \
         icu-libs \
         libzip \
         oniguruma \
-        # Used by the entrypoint wait-for-db helper
-        mysql-client \
+        # Used by the entrypoint wait-for-db helper (pg_isready)
+        postgresql-client \
         # Provides cgi-fcgi for a real FPM liveness probe (/fpm-ping)
         fcgi \
         # Allows graceful signal forwarding to php-fpm child processes
