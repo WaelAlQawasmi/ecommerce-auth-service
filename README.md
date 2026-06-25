@@ -613,6 +613,7 @@ make logs-app          # View app logs
 
 - **[QUICKSTART.md](./QUICKSTART.md)** - Get up and running in minutes
 - **[DOCKER.md](./DOCKER.md)** - Comprehensive Docker guide (external DB, troubleshooting, production)
+- **[docs/PRODUCTION-ECR.md](./docs/PRODUCTION-ECR.md)** - Production deploy: ECR build/push + EC2 `deploy.sh`
 
 The Docker setup includes:
 - ✅ PHP 8.4 FPM

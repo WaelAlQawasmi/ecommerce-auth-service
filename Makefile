@@ -1,4 +1,10 @@
-.PHONY: help build up down logs bash app-bash migrate seed tinker test ps
+.PHONY: help build build-production build-nginx push-ecr ecr-login up down logs bash app-bash migrate seed tinker test ps
+
+# ECR image URIs (override: make build-nginx ECR_NGINX=...)
+ECR_REGISTRY ?= 975049961565.dkr.ecr.us-east-1.amazonaws.com
+ECR_AUTH ?= $(ECR_REGISTRY)/microservices/auth
+ECR_NGINX ?= $(ECR_REGISTRY)/microservices/nginx
+AWS_REGION ?= us-east-1
 
 # Route compose interpolation through .env.docker (+ optional .env.docker.local).
 COMPOSE_ENV := --env-file .env.docker
@@ -11,16 +17,22 @@ else
 COMPOSE := docker compose $(COMPOSE_ENV)
 endif
 
-# Enable bundled PostgreSQL unless DOCKER_DB_ENABLED=false in env files.
+# Compose profiles: bundled postgres (docker-db) and redis (docker-redis).
+# Disabled when DOCKER_*_ENABLED=false in .env.docker / .env.docker.local.
 DOCKER_DB_ENABLED := $(shell grep -E '^DOCKER_DB_ENABLED=' .env.docker 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '\r')
+DOCKER_REDIS_ENABLED := $(shell grep -E '^DOCKER_REDIS_ENABLED=' .env.docker 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '\r')
 ifneq (,$(wildcard .env.docker.local))
 DOCKER_DB_ENABLED := $(shell grep -E '^DOCKER_DB_ENABLED=' .env.docker.local 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '\r')
+DOCKER_REDIS_ENABLED := $(shell grep -E '^DOCKER_REDIS_ENABLED=' .env.docker.local 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '\r')
 endif
-ifeq ($(DOCKER_DB_ENABLED),false)
-export COMPOSE_PROFILES :=
-else
-export COMPOSE_PROFILES := docker-db
+COMPOSE_PROFILES :=
+ifneq ($(DOCKER_DB_ENABLED),false)
+COMPOSE_PROFILES += docker-db
 endif
+ifneq ($(DOCKER_REDIS_ENABLED),false)
+COMPOSE_PROFILES += docker-redis
+endif
+export COMPOSE_PROFILES
 
 # Default target
 help:
@@ -29,7 +41,10 @@ help:
 	@echo ""
 	@echo "Available commands:"
 	@echo "  make help              - Show this help message"
-	@echo "  make build             - Build Docker images"
+	@echo "  make build             - Build Docker images (compose)"
+	@echo "  make build-production  - Build app image only (production target)"
+	@echo "  make build-nginx       - Build nginx image for ECR"
+	@echo "  make push-ecr          - Build, tag, and push auth + nginx to ECR"
 	@echo "  make up                - Start all containers"
 	@echo "  make down              - Stop all containers"
 	@echo "  make restart           - Restart all containers"
@@ -54,13 +69,45 @@ help:
 	@echo "  make db-restore        - Restore database from backup"
 	@echo ""
 	@echo "External DB (RDS): DOCKER_DB_ENABLED=false in .env.docker.local"
+	@echo "No Redis container: DOCKER_REDIS_ENABLED=false in .env.docker.local"
 	@echo "  Template: .env.docker.production.example"
+	@echo "  Production (ECR+EC2): docs/PRODUCTION-ECR.md"
 	@echo ""
 
 # Build Docker images
 build:
 	@echo "Building Docker images..."
 	$(COMPOSE) build
+
+# Build PHP-FPM app image only (for ECR / standalone deploy)
+build-production:
+	@echo "Building production app image..."
+	docker build --target production -t ecommerce-auth-service:latest .
+
+# Build nginx reverse-proxy image (for ECR / standalone deploy)
+build-nginx:
+	@echo "Building nginx image..."
+	docker build -f docker/nginx/Dockerfile -t ecommerce-auth-service-nginx:latest .
+	docker tag ecommerce-auth-service-nginx:latest $(ECR_NGINX):latest
+	@echo "Tagged: $(ECR_NGINX):latest"
+
+# Login to AWS ECR
+ecr-login:
+	aws ecr get-login-password --region $(AWS_REGION) | \
+		docker login --username AWS --password-stdin $(ECR_REGISTRY)
+
+# Tag and push app + nginx images to ECR (run ecr-login first, or use push-ecr)
+push-production: build-production
+	docker tag ecommerce-auth-service:latest $(ECR_AUTH):latest
+	docker push $(ECR_AUTH):latest
+	@echo "Pushed: $(ECR_AUTH):latest"
+
+push-nginx: build-nginx
+	docker push $(ECR_NGINX):latest
+	@echo "Pushed: $(ECR_NGINX):latest"
+
+push-ecr: ecr-login push-production push-nginx
+	@echo "All images pushed to $(ECR_REGISTRY)"
 
 # Start containers
 up:
