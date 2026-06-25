@@ -11,6 +11,17 @@ else
 COMPOSE := docker compose $(COMPOSE_ENV)
 endif
 
+# Enable bundled PostgreSQL unless DOCKER_DB_ENABLED=false in env files.
+DOCKER_DB_ENABLED := $(shell grep -E '^DOCKER_DB_ENABLED=' .env.docker 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '\r')
+ifneq (,$(wildcard .env.docker.local))
+DOCKER_DB_ENABLED := $(shell grep -E '^DOCKER_DB_ENABLED=' .env.docker.local 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '\r')
+endif
+ifeq ($(DOCKER_DB_ENABLED),false)
+export COMPOSE_PROFILES :=
+else
+export COMPOSE_PROFILES := docker-db
+endif
+
 # Default target
 help:
 	@echo "Ecommerce Auth Service - Docker Commands"
@@ -24,7 +35,7 @@ help:
 	@echo "  make restart           - Restart all containers"
 	@echo "  make logs              - View logs from all services"
 	@echo "  make logs-app          - View app container logs"
-	@echo "  make logs-mysql        - View MySQL container logs"
+	@echo "  make logs-postgres     - View PostgreSQL container logs"
 	@echo "  make logs-nginx        - View Nginx container logs"
 	@echo "  make ps                - Show container status"
 	@echo "  make bash              - SSH into app container"
@@ -41,6 +52,9 @@ help:
 	@echo "  make fresh             - Clean and rebuild everything"
 	@echo "  make db-backup         - Create database backup"
 	@echo "  make db-restore        - Restore database from backup"
+	@echo ""
+	@echo "External DB (RDS): DOCKER_DB_ENABLED=false in .env.docker.local"
+	@echo "  Template: .env.docker.production.example"
 	@echo ""
 
 # Build Docker images
@@ -71,8 +85,8 @@ logs:
 logs-app:
 	$(COMPOSE) logs -f app
 
-logs-mysql:
-	$(COMPOSE) logs -f mysql
+logs-postgres:
+	$(COMPOSE) logs -f postgres
 
 logs-nginx:
 	$(COMPOSE) logs -f nginx
@@ -136,7 +150,7 @@ fresh: clean build up
 # Create database backup
 db-backup:
 	@echo "Creating database backup..."
-	$(COMPOSE) exec mysql mysqldump -u auth_user -p ecommerce_auth > backup_$$(date +%Y%m%d_%H%M%S).sql
+	$(COMPOSE) exec -T postgres pg_dump -U auth_user ecommerce_auth > backup_$$(date +%Y%m%d_%H%M%S).sql
 	@echo "✓ Backup created"
 
 # Restore database from backup (usage: make db-restore BACKUP=backup_20231201_120000.sql)
@@ -146,7 +160,7 @@ db-restore:
 		exit 1; \
 	fi
 	@echo "Restoring database from $(BACKUP)..."
-	$(COMPOSE) exec -T mysql mysql -u auth_user -p ecommerce_auth < $(BACKUP)
+	$(COMPOSE) exec -T postgres psql -U auth_user -d ecommerce_auth < $(BACKUP)
 	@echo "✓ Database restored"
 
 # Artisan commands

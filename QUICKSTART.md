@@ -47,15 +47,14 @@ docker-compose up -d --build
 ## Access Your Application
 
 - **Application**: http://localhost
-- **MySQL**: localhost:3306
+- **PostgreSQL**: localhost:5432
 - **Redis**: localhost:6379
 
 ## Default Credentials
 
 | Service | Username | Password | Database |
 |---------|----------|----------|----------|
-| MySQL | auth_user | authpassword123 | ecommerce_auth |
-| MySQL Root | root | rootpassword123 | - |
+| PostgreSQL | auth_user | authpassword123 | ecommerce_auth |
 | Redis | - | (no auth) | - |
 
 ## Essential Commands
@@ -76,7 +75,7 @@ docker-compose logs -f
 
 # Specific service
 docker-compose logs -f app
-docker-compose logs -f mysql
+docker-compose logs -f postgres
 docker-compose logs -f nginx
 docker-compose logs -f redis
 ```
@@ -105,10 +104,10 @@ docker-compose exec app composer install
 docker-compose exec app composer update
 ```
 
-### Access MySQL
+### Access PostgreSQL
 
 ```bash
-docker-compose exec mysql mysql -u auth_user -p ecommerce_auth
+docker-compose exec postgres psql -U auth_user -d ecommerce_auth
 # Password: authpassword123
 ```
 
@@ -158,8 +157,7 @@ ecommerce-auth-service/
 │   │   │   └── app.conf       # Nginx configuration
 │   │   └── ssl/               # SSL certificates (if using HTTPS)
 │   │
-│   └── mysql/
-│       └── my.cnf             # MySQL configuration (schema owned by migrations)
+│   └── postgres/              # (optional) PostgreSQL tuning configs
 │
 ├── app/                       # Laravel application
 ├── config/                    # Configuration files
@@ -181,7 +179,7 @@ ecommerce-auth-service/
    - All required PHP extensions
    - Composer and Node.js installed
 
-2. **MySQL 8.0** (mysql)
+2. **PostgreSQL 16** (postgres)
    - Automatic database creation
    - Persistent volume for data
    - Health checks enabled
@@ -232,13 +230,13 @@ docker-compose exec app php artisan test --watch
 
 ```bash
 # Create database backup
-docker-compose exec mysql mysqldump -u auth_user -p ecommerce_auth > backup.sql
+docker-compose exec -T postgres pg_dump -U auth_user ecommerce_auth > backup.sql
 
 # Restore database
-docker-compose exec -T mysql mysql -u auth_user -p ecommerce_auth < backup.sql
+docker-compose exec -T postgres psql -U auth_user -d ecommerce_auth < backup.sql
 
-# Access MySQL CLI
-docker-compose exec mysql mysql -u auth_user -p ecommerce_auth
+# Access PostgreSQL CLI
+docker-compose exec postgres psql -U auth_user -d ecommerce_auth
 ```
 
 ### Cache Operations
@@ -319,14 +317,14 @@ docker-compose up -d --build
 ### Database connection errors
 
 ```bash
-# Verify MySQL is running
-docker-compose ps mysql
+# Verify PostgreSQL is running
+docker-compose ps postgres
 
-# Check MySQL logs
-docker-compose logs mysql
+# Check PostgreSQL logs
+docker-compose logs postgres
 
 # Test connection
-docker-compose exec app mysql -h mysql -u auth_user -p ecommerce_auth -e "SELECT 1"
+docker-compose exec app php artisan db:show
 ```
 
 ### Permission issues
@@ -385,7 +383,7 @@ docker-compose up -d --build
 |-------|----------|
 | Permission denied | `chmod +x docker-start.sh` |
 | Port 80 in use | Change port in `docker-compose.yml` |
-| MySQL won't connect | Wait 30 seconds for MySQL to initialize |
+| PostgreSQL won't connect | Wait 30 seconds for PostgreSQL to initialize |
 | File changes not reflecting | Check volume mounts in `docker-compose.yml` |
 | Out of memory | Increase Docker Desktop memory allocation |
 | Slow performance | Check system resources, disk space |

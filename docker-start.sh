@@ -23,6 +23,33 @@ compose() {
     fi
 }
 
+read_env_var() {
+    local file="$1" key="$2"
+    if [ -f "$file" ]; then
+        grep -E "^${key}=" "$file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' || true
+    fi
+}
+
+configure_compose_profiles() {
+    local enabled
+    enabled="$(read_env_var .env.docker.local DOCKER_DB_ENABLED)"
+    [ -z "$enabled" ] && enabled="$(read_env_var .env.docker DOCKER_DB_ENABLED)"
+    [ -z "$enabled" ] && enabled="true"
+
+    if [ "$enabled" = "false" ]; then
+        export COMPOSE_PROFILES=""
+        echo "→ External database mode (DOCKER_DB_ENABLED=false)"
+    else
+        export COMPOSE_PROFILES="${COMPOSE_PROFILES:-docker-db}"
+        echo "→ Bundled PostgreSQL enabled (DOCKER_DB_ENABLED=true)"
+    fi
+}
+
+compose_env_args=(--env-file .env.docker)
+if [ -f .env.docker.local ]; then
+    compose_env_args+=(--env-file .env.docker.local)
+fi
+
 echo "✓ Docker and Docker Compose are installed"
 echo ""
 
@@ -39,13 +66,14 @@ echo ""
 echo "Building Docker images..."
 echo ""
 
-compose build
+configure_compose_profiles
+compose "${compose_env_args[@]}" build
 
 echo ""
 echo "Starting containers..."
 echo ""
 
-compose up -d
+compose "${compose_env_args[@]}" up -d
 
 echo ""
 echo "Waiting for services to be healthy..."
@@ -74,10 +102,17 @@ echo "  docker compose ps               # Show container status"
 echo "  docker compose down             # Stop containers"
 echo ""
 echo "Database credentials:"
-echo "  Host: localhost:3306"
-echo "  User: auth_user"
-echo "  Password: authpassword123"
-echo "  Database: ecommerce_auth"
+enabled="$(read_env_var .env.docker.local DOCKER_DB_ENABLED)"
+[ -z "$enabled" ] && enabled="$(read_env_var .env.docker DOCKER_DB_ENABLED)"
+[ -z "$enabled" ] && enabled="true"
+if [ "$enabled" = "false" ]; then
+    echo "  Using external database — see DB_HOST in .env.docker / .env.docker.local"
+else
+    echo "  Host: localhost:5432 (container: postgres)"
+    echo "  User: auth_user"
+    echo "  Password: authpassword123"
+    echo "  Database: ecommerce_auth"
+fi
 echo ""
 echo "For more information, see DOCKER.md"
 echo ""

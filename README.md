@@ -30,7 +30,7 @@ The Auth Service is responsible for managing user authentication and authorizati
 | Language          | PHP 8.3+         |
 | Framework         | Laravel          |
 | Authentication    | Laravel Passport |
-| Database          | MySQL            |
+| Database          | PostgreSQL       |
 | Cache             | Redis            |
 | Messaging         | Kafka            |
 | Containerization  | Docker           |
@@ -56,7 +56,7 @@ The Auth Service is responsible for managing user authentication and authorizati
       |             |
       v             v
 
-    MySQL         Redis
+    PostgreSQL      Redis
 
              |
              v
@@ -399,7 +399,7 @@ php artisan test
 Or with Docker:
 
 ```bash
-docker-compose exec app php artisan test
+docker compose --env-file .env.docker exec app php artisan test
 ```
 
 Tests cover role definitions, user repository queries, user management authorization (admin/support vs customer), and registration role assignment.
@@ -441,9 +441,12 @@ Tests cover role definitions, user repository queries, user management authoriza
 ```env
 APP_NAME=AuthService
 
-DB_CONNECTION=mysql
-DB_HOST=mysql
-DB_PORT=3306
+# Docker: bundled PostgreSQL (true) or external database (false)
+DOCKER_DB_ENABLED=true
+
+DB_CONNECTION=pgsql
+DB_HOST=postgres          # container hostname when DOCKER_DB_ENABLED=true
+DB_PORT=5432
 
 REDIS_HOST=redis
 
@@ -452,6 +455,8 @@ KAFKA_BROKER=kafka:9092
 PASSPORT_PRIVATE_KEY=
 PASSPORT_PUBLIC_KEY=
 ```
+
+For Docker, copy `.env.docker` (or use `.env.docker.local` for local overrides). See the [Docker](#docker) section below.
 
 ---
 
@@ -502,7 +507,21 @@ php artisan serve
 
 ### Quick Start (Recommended)
 
-The fastest way to get the application running with MySQL, Redis, and Nginx:
+The fastest way to get the application running with PostgreSQL, Redis, and Nginx:
+
+**Windows:**
+```bash
+docker-start.bat
+```
+
+**macOS/Linux:**
+```bash
+bash docker-start.sh
+# or
+make up
+```
+
+Production-style startup (build + health checks):
 
 **Windows:**
 ```bash
@@ -514,54 +533,76 @@ run-production.bat
 bash run-production.sh
 ```
 
-Or run directly:
+Or run Compose directly (bundled PostgreSQL is enabled via the `docker-db` profile):
 
 ```bash
-docker-compose up -d --build
+COMPOSE_PROFILES=docker-db docker compose --env-file .env.docker up -d --build
 ```
+
+Configuration lives in `.env.docker`. For local overrides (secrets, external DB), copy `.env.docker.local.example` to `.env.docker.local` (gitignored).
+
+### Bundled PostgreSQL vs External Database
+
+By default, `DOCKER_DB_ENABLED=true` in `.env.docker` starts a PostgreSQL 16 container alongside the app.
+
+To use an external database (RDS, Azure Database, managed Postgres, etc.), create `.env.docker.local`:
+
+```env
+DOCKER_DB_ENABLED=false
+DB_HOST=your-db.region.rds.amazonaws.com
+DB_PORT=5432
+DB_DATABASE=ecommerce_auth
+DB_USERNAME=auth_user
+DB_PASSWORD=your_external_db_password
+```
+
+Then start the stack as usual (`make up`, `docker-start.sh`, or `run-production.sh`). The `postgres` container is skipped; app containers connect using `DB_HOST` and related settings.
+
+To switch back to the bundled database, set `DOCKER_DB_ENABLED=true` or remove the override from `.env.docker.local`.
 
 ### Access Application
 
-- **Application**: http://localhost
-- **Database**: MySQL on localhost:3306
-- **Redis**: localhost:6379
+- **Application**: http://localhost:8080 (override with `NGINX_HOST_PORT` in `.env.docker`)
+- **Database** (bundled mode): PostgreSQL on localhost:5432
+- **Redis**: internal to the Docker network (not exposed by default)
 
 ### Default Credentials
 
+When `DOCKER_DB_ENABLED=true` (bundled PostgreSQL):
+
 ```
-MySQL User: auth_user
-MySQL Password: authpassword123
-MySQL Database: ecommerce_auth
-MySQL Root Password: rootpassword123
+PostgreSQL User: auth_user
+PostgreSQL Password: authpassword123
+PostgreSQL Database: ecommerce_auth
 ```
 
 ### Essential Commands
 
 ```bash
 # View logs
-docker-compose logs -f app
+docker compose --env-file .env.docker logs -f app
 
 # Run migrations
-docker-compose exec app php artisan migrate
+docker compose --env-file .env.docker exec app php artisan migrate
 
 # Run seeders
-docker-compose exec app php artisan db:seed
+docker compose --env-file .env.docker exec app php artisan db:seed
 
 # Access Laravel Tinker
-docker-compose exec app php artisan tinker
+docker compose --env-file .env.docker exec app php artisan tinker
 
 # Run tests
-docker-compose exec app php artisan test
+docker compose --env-file .env.docker exec app php artisan test
 
 # Stop containers
-docker-compose down
+docker compose --env-file .env.docker down
 ```
 
 ### Using Makefile (macOS/Linux)
 
 ```bash
 make help              # Show all available commands
-make up                # Start containers
+make up                # Start containers (respects DOCKER_DB_ENABLED)
 make down              # Stop containers
 make migrate           # Run migrations
 make seed              # Seed database
@@ -571,13 +612,13 @@ make logs-app          # View app logs
 ### Documentation
 
 - **[QUICKSTART.md](./QUICKSTART.md)** - Get up and running in minutes
-- **[DOCKER.md](./DOCKER.md)** - Comprehensive Docker guide
+- **[DOCKER.md](./DOCKER.md)** - Comprehensive Docker guide (external DB, troubleshooting, production)
 
 The Docker setup includes:
-- ✅ PHP 8.3 FPM
-- ✅ MySQL 8.0 with persistent volumes
+- ✅ PHP 8.4 FPM
+- ✅ PostgreSQL 16 with persistent volumes (optional via `DOCKER_DB_ENABLED`)
 - ✅ Nginx with SSL support
-- ✅ Redis 7 for caching
+- ✅ Redis 7 for caching and queues
 - ✅ Health checks
 - ✅ Automatic migrations
 - ✅ Development and production configurations

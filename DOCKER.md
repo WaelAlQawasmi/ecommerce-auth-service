@@ -14,8 +14,7 @@ docker/
 │   ├── conf.d/
 │   │   └── app.conf          # Nginx configuration
 │   └── ssl/                  # SSL certificates (create if needed)
-└── mysql/
-    └── my.cnf                # MySQL configuration
+└── postgres/                 # (optional) PostgreSQL tuning configs
 ```
 
 ## Quick Start
@@ -45,7 +44,7 @@ docker-compose up -d --build
 This will:
 - Build the PHP-FPM image
 - Start PHP-FPM container
-- Start MySQL 8.0 container
+- Start PostgreSQL 16 container
 - Start Nginx container
 - Start Redis container
 - Run database migrations automatically
@@ -60,7 +59,7 @@ Expected output:
 ```
 NAME                          STATUS
 ecommerce-auth-app           Up (healthy)
-ecommerce-auth-mysql         Up (healthy)
+ecommerce-auth-postgres      Up (healthy)
 ecommerce-auth-nginx         Up (healthy)
 ecommerce-auth-redis         Up (healthy)
 ```
@@ -68,7 +67,7 @@ ecommerce-auth-redis         Up (healthy)
 ### 5. Access the Application
 
 - **Application**: http://localhost
-- **MySQL**: localhost:3306
+- **PostgreSQL**: localhost:5432
 - **Redis**: localhost:6379
 
 ## Environment Configuration
@@ -76,11 +75,10 @@ ecommerce-auth-redis         Up (healthy)
 ### Default Credentials
 
 ```
-MySQL:
+PostgreSQL:
   Database: ecommerce_auth
   Username: auth_user
   Password: authpassword123
-  Root Password: rootpassword123
 
 Redis: No authentication (default)
 ```
@@ -94,9 +92,30 @@ Edit `docker-compose.yml` or create a `.env` file:
 DB_DATABASE=my_database
 DB_USERNAME=my_user
 DB_PASSWORD=my_secure_password
-DB_PORT=3307  # Custom port if needed
+DB_PORT=5433  # Custom port if needed
 APP_PORT=8080  # Custom app port if needed
 ```
+
+### Bundled PostgreSQL vs External Database
+
+By default the stack includes a PostgreSQL container. To use an external database (RDS, Azure Database, etc.) instead:
+
+1. Create or edit `.env.docker.local` (gitignored):
+
+```bash
+DOCKER_DB_ENABLED=false
+DB_HOST=your-db.region.rds.amazonaws.com
+DB_PORT=5432
+DB_DATABASE=ecommerce_auth
+DB_USERNAME=auth_user
+DB_PASSWORD=your_external_db_password
+```
+
+2. Start the stack as usual (`make up`, `docker-start.sh`, or `docker compose --env-file .env.docker up -d` with `COMPOSE_PROFILES=docker-db` unset).
+
+When `DOCKER_DB_ENABLED=false`, the `postgres` service is not started. App containers connect using `DB_HOST` / `DB_*` and reach the host over the `egress` network.
+
+To re-enable the bundled database, set `DOCKER_DB_ENABLED=true` (default in `.env.docker`).
 
 ## Common Commands
 
@@ -108,7 +127,7 @@ docker-compose logs -f
 
 # Specific service
 docker-compose logs -f app
-docker-compose logs -f mysql
+docker-compose logs -f postgres
 docker-compose logs -f nginx
 ```
 
@@ -134,17 +153,14 @@ docker-compose exec app npm run dev
 ### Database Access
 
 ```bash
-# Access MySQL CLI
-docker-compose exec mysql mysql -u auth_user -p ecommerce_auth
-# Password: authpassword123
+# Access PostgreSQL CLI
+docker-compose exec postgres psql -U auth_user -d ecommerce_auth
 
 # Create database backup
-docker-compose exec mysql mysqldump -u auth_user -p ecommerce_auth > backup.sql
-# Password: authpassword123
+docker-compose exec -T postgres pg_dump -U auth_user ecommerce_auth > backup.sql
 
 # Restore database backup
-docker-compose exec -T mysql mysql -u auth_user -p ecommerce_auth < backup.sql
-# Password: authpassword123
+docker-compose exec -T postgres psql -U auth_user -d ecommerce_auth < backup.sql
 ```
 
 ### Redis Access
@@ -163,7 +179,7 @@ docker-compose exec redis redis-cli FLUSHALL
 ## PHP Modules
 
 The Docker image includes the following PHP extensions:
-- pdo, pdo_mysql
+- pdo, pdo_pgsql
 - bcmath
 - ctype
 - fileinfo
@@ -255,13 +271,13 @@ To enable HTTPS:
 
 2. **Use environment variables** for sensitive data (from CI/CD or secrets manager)
 
-3. **Disable query cache** or configure appropriately in `docker/mysql/my.cnf`
+3. **Tune PostgreSQL** via `docker-compose.yml` command flags or a custom config file
 
 4. **Configure HTTPS** with valid SSL certificates
 
 5. **Set up proper logging and monitoring**
 
-6. **Use managed database** (AWS RDS, Azure Database) instead of containerized MySQL
+6. **Use managed database** (AWS RDS PostgreSQL, Azure Database for PostgreSQL) instead of containerized PostgreSQL
 
 ## Troubleshooting
 
@@ -287,21 +303,24 @@ docker-compose exec app chmod -R 755 storage bootstrap/cache
 ### Database Connection Failed
 
 ```bash
-# Verify MySQL is running and healthy
-docker-compose ps mysql
+# Verify PostgreSQL is running and healthy
+docker-compose ps postgres
 
-# Check MySQL logs
-docker-compose logs mysql
+# Check PostgreSQL logs
+docker-compose logs postgres
 
 # Test connection
-docker-compose exec app mysql -h mysql -u auth_user -p ecommerce_auth -e "SELECT 1"
+docker-compose exec app php artisan db:show
 ```
 
 ### Memory Issues
 
-Update `docker/mysql/my.cnf`:
-```ini
-innodb_buffer_pool_size = 128M  # Reduce if low memory
+Update PostgreSQL settings in `docker-compose.yml` under the `postgres` service `command` block:
+```yaml
+command: >
+  postgres
+  -c shared_buffers=128MB
+  -c max_connections=50
 ```
 
 ### Port Already in Use
@@ -314,7 +333,7 @@ ports:
 
 ## Performance Tips
 
-1. **Use named volumes** for MySQL and Redis
+1. **Use named volumes** for PostgreSQL and Redis
 2. **Configure Docker Desktop** memory allocation
 3. **Use `.dockerignore`** to exclude unnecessary files
 4. **Enable BuildKit**:

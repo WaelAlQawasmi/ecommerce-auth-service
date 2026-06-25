@@ -56,8 +56,9 @@ services:
       - internal
       - egress
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
+        required: false   # omitted when DOCKER_DB_ENABLED=false (no docker-db profile)
       redis:
         condition: service_healthy
     healthcheck:
@@ -137,41 +138,38 @@ services:
           memory: 64M
 
   # ---------------------------------------------------------------------------
-  # MySQL 8 — primary database
+  # PostgreSQL 16 — primary database (optional; see DOCKER_DB_ENABLED in .env.docker)
+  # Started only with the `docker-db` Compose profile (default when DOCKER_DB_ENABLED=true).
+  # Set DOCKER_DB_ENABLED=false and point DB_HOST at your external database instead.
   # ---------------------------------------------------------------------------
-  mysql:
-    image: mysql:8.4
+  postgres:
+    profiles:
+      - docker-db
+    image: postgres:16-alpine
     restart: unless-stopped
     command: >
-      --innodb-buffer-pool-size=128M
-      --innodb-log-buffer-size=32M
-      --max-connections=50
-      --performance-schema=OFF
+      postgres
+      -c shared_buffers=128MB
+      -c max_connections=50
     mem_limit: 512m
     memswap_limit: 1g
     environment:
-      MYSQL_DATABASE:      ${DB_DATABASE:-ecommerce_auth}
-      MYSQL_USER:          ${DB_USERNAME:-auth_user}
-      MYSQL_PASSWORD:      ${DB_PASSWORD:-authpassword123}
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword123}
-      MYSQL_INITDB_SKIP_TZINFO: "1"
+      POSTGRES_DB:       ${DB_DATABASE:-ecommerce_auth}
+      POSTGRES_USER:     ${DB_USERNAME:-auth_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-authpassword123}
     volumes:
-      - mysql-data:/var/lib/mysql
-      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/app.cnf:ro
+      - postgres-data:/var/lib/postgresql/data
     networks:
       - internal
-    # Never expose 3306 to the host in production.
+    # Never expose 5432 to the host in production.
     # Uncomment the line below ONLY for local development:
     # ports:
-    #   - "127.0.0.1:3306:3306"
+    #   - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "--silent",
-            "--host=127.0.0.1",
-            "--user=${DB_USERNAME}",
-            "--password=${DB_PASSWORD}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-auth_user} -d ${DB_DATABASE:-ecommerce_auth}"]
       interval: 10s
       timeout: 5s
-      start_period: 60s
+      start_period: 30s
       retries: 10
     security_opt:
       - no-new-privileges:true
@@ -261,8 +259,9 @@ services:
     depends_on:
       app:
         condition: service_healthy
-      mysql:
+      postgres:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
     security_opt:
@@ -310,8 +309,9 @@ services:
     depends_on:
       app:
         condition: service_healthy
-      mysql:
+      postgres:
         condition: service_healthy
+        required: false
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -334,7 +334,7 @@ services:
 # Named volumes — all data persisted outside container lifecycle
 # =============================================================================
 volumes:
-  mysql-data:
+  postgres-data:
     driver: local
   redis-data:
     driver: local

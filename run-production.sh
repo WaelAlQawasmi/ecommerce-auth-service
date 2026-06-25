@@ -30,40 +30,6 @@ if dpkg -l docker-compose-v2 2>/dev/null | grep -q '^ii'; then
   sudo apt remove -y docker-compose-v2
 fi
 
-# ─── Fix my.cnf (must be a file, not a directory) ─────────────────────────
-CNF_PATH="./docker/mysql/my.cnf"
-if [ -d "$CNF_PATH" ]; then
-  echo "→ my.cnf is a directory — removing and recreating as file..."
-  rm -rf "$CNF_PATH"
-fi
-if [ ! -f "$CNF_PATH" ]; then
-  echo "→ Creating my.cnf..."
-  mkdir -p ./docker/mysql
-  cat > "$CNF_PATH" <<'EOF'
-[mysqld]
-pid_file                        = /var/run/mysqld/mysqld.pid
-socket                          = /var/run/mysqld/mysqld.sock
-datadir                         = /var/lib/mysql
-log_error                       = /dev/stderr
-character_set_server            = utf8mb4
-collation_server                = utf8mb4_0900_ai_ci
-bind_address                    = 0.0.0.0
-max_connections                 = 50
-innodb_buffer_pool_size         = 128M
-innodb_buffer_pool_instances    = 1
-innodb_redo_log_capacity        = 64M
-innodb_flush_method             = O_DIRECT
-innodb_file_per_table           = ON
-local_infile                    = OFF
-slow_query_log                  = ON
-slow_query_log_file             = /dev/stderr
-long_query_time                 = 1
-EOF
-  echo "✓ my.cnf created"
-else
-  echo "✓ my.cnf already exists"
-fi
-
 test -x "$(command -v docker)" >/dev/null 2>&1 || {
   echo "ERROR: Docker is not installed. Install Docker and try again."
   exit 1
@@ -97,6 +63,23 @@ _read_env_var() {
   local file="$1" key="$2"
   if [ -f "$file" ]; then
     grep -E "^${key}=" "$file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' || true
+  fi
+}
+_read_docker_db_enabled() {
+  local val
+  val="$(_read_env_var .env.docker.local DOCKER_DB_ENABLED)"
+  [ -z "$val" ] && val="$(_read_env_var .env.docker DOCKER_DB_ENABLED)"
+  [ -z "$val" ] && val="true"
+  echo "$val"
+}
+
+configure_compose_profiles() {
+  if [ "$(_read_docker_db_enabled)" = "false" ]; then
+    export COMPOSE_PROFILES=""
+    echo "→ External database mode (DOCKER_DB_ENABLED=false)"
+  else
+    export COMPOSE_PROFILES="${COMPOSE_PROFILES:-docker-db}"
+    echo "→ Bundled PostgreSQL enabled (DOCKER_DB_ENABLED=true)"
   fi
 }
 _debug_nginx_port_diagnostics() {
@@ -135,6 +118,7 @@ fi
 
 echo ""
 echo "Building Docker images..."
+configure_compose_profiles
 _debug_nginx_port_diagnostics
 compose build
 
